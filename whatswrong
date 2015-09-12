@@ -13,197 +13,243 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+
+### Options
+## Enable colour output
 COLOUR=1
+SUPPRESSOK=1
+
+SEM_low="10"
+
+
+## Services to look for
+CHECKSVCS="/usr/sbin/apache2 /usr/sbin/httpd /usr/sbin/varnishd /usr/sbin/nginx /usr/sbin/mysqld /usr/bin/mongod /usr/sbin/asterisk /usr/sbin/named /usr/sbin/bind9"
+
+
+
+
+
+### External Programs
+DMESG="/bin/dmesg"
+GREP="/bin/grep"
+EGREP="/bin/egrep -q"
+PGREP="/usr/bin/pgrep"
+SED="/bin/sed"
+AWK="/usr/bin/awk"
+WC="/usr/bin/wc"
+DF="/bin/df"
+IPCS="/usr/bin/ipcs -s"
+BC="/usr/bin/bc"
+
+
+
+### Generic multi-use vars
+DMO="$($DMESG)"
 BADCOUNT=0
+WARNCOUNT=0
+OKCOUNT=0
 
 ### Generic functions
-ok() {
-  if [ $COLOUR -eq 1 ]; then
-    echo -e "\033[32m✓ \033[00m $1"
-  else
-    echo "OK: $1"
-  fi
-  unset OUTPUT
+OK() {
+    if [ $SUPPRESSOK -ne 1 ]; then
+        if [ $COLOUR -eq 1 ]; then
+            echo -e "[\033[32m OK \033[00m]\t $1"
+        else
+            echo "[ OK ]\t $1"
+        fi
+    fi
+    OKCOUNT=$(($OKCOUNT+1))
 }
 
-bad() {
-  if [ $COLOUR -eq 1 ]; then
-    echo -e "\033[31m✘ \033[00m $1"
-  else
-    echo "ERROR: $1"
-  fi
-  unset OUTPUT
-  BADCOUNT=$(($BADCOUNT+1))
+BAD() {
+    if [ $COLOUR -eq 1 ]; then
+        echo -e "[\033[31mERROR\033[00m]\t $1"
+    else
+        echo "[ ERROR ]\t $1"
+    fi
+    BADCOUNT=$(($BADCOUNT+1))
 }
 
-total_bad() {
-  echo
-  echo "Found $BADCOUNT potential problem(s)"
+
+WARN() {
+    if [ $COLOUR -eq 1 ]; then
+        echo -e "[\033[33mWARN\033[00m]\t $1"
+    else
+        echo "[ WARN ]\t $1"
+    fi
+    WARNCOUNT=$(($WARNCOUNT+1))
+}
+
+totals() {
+    echo -en "\nFindings:\n $BADCOUNT errors\n $WARNCOUNT Warnings\n $OKCOUNT checks passed\n\n"
 }
 
 percentage() {
-  # Given the total and the max, returns an integer percentage
-  echo "scale=2; $1 / $2 * 100" | bc | sed -e 's/\..*//'
+    # Given the total and the max, returns an integer percentage
+    echo "scale=2; $1 / $2 * 100" | bc | $SED -e 's/\..*//'
 }
+
+
 
 ### Disk checks
 
 uncorrectable_drive_error() {
-  if dmesg | grep -q 'UncorrectableError'; then
-    bad "Uncorrectable drive error found in dmesg log"
-  else
-    ok "No uncorrectable drive errors"
-  fi
+    if echo $DMO | $GREP -q 'UncorrectableError'; then
+        BAD "Uncorrectable drive error found in dmesg log"
+    else
+        OK "No uncorrectable drive errors"
+    fi
 }
 
 buffer_io_error() {
-  if dmesg | grep -q 'Buffer I/O error on device'; then
-    bad "I/O errors in ringbuffer log"
-  else
-    ok "No I/O errors reported in ringbuffer log"
-  fi
+    if echo $DMO| $GREP -q 'Buffer I/O error on device'; then
+        BAD "I/O errors in ringbuffer log"
+    else
+        OK "No I/O errors reported in ringbuffer log"
+    fi
 }
 
 disk_full() {
-  if df | awk '{print $5}' | egrep -q '(100|99)%'; then
-    bad "One or more volumes are full"
-  else
-    ok "All volumes have some free space"
-  fi
+    if $DF | $AWK '{print $5}' | $EGREP '(100|99)%'; then
+        BAD "One or more volumes are full"
+    else
+        OK "All volumes have some free space"
+    fi
 }
 
 inode_full() {
-  if df -i | awk '{print $5}' | egrep -q '(100|99)%'; then
-    bad "One or more volumes has no available inodes"
-  else
-    ok "All volumes have inodes available"
-  fi
+    if $DF -i | $AWK '{print $5}' | $EGREP '(100|99)%'; then
+        BAD "One or more volumes have no available inodes"
+    else
+        OK "All volumes have inodes available"
+    fi
 }
 
 remounted_ro() {
-  if dmesg | grep -q 'Remounting filesystem read-only'; then
-    bad "Filesystem re-mounted read only"
-  else
-    ok "No filesystems re-mounted read only"
-  fi
+    if echo $DMO | $GREP -q 'Remounting filesystem read-only'; then
+        BAD "Filesystem re-mounted read only"
+    else
+        OK "No filesystems re-mounted read only"
+    fi
 }
 
 
 ### VM checks
 oom_hit() {
-  if dmesg | grep -q 'invoked oom-killer'; then
-    bad "Out of memory killer has been triggered"
-  else
-    ok "No out of memory conditions found"
-  fi
+    if echo $DMO | $GREP -q 'invoked oom-killer'; then
+        BAD "Out of memory killer has been triggered"
+    else
+        OK "No out of memory conditions found"
+    fi
 }
 
 high_swap() {
-  total=$(grep 'SwapTotal' /proc/meminfo  | awk '{print $2}')
-  if [ $total -eq 0 ]; then
-    # No swap to use..
-    return
-  fi
-  used=$(grep 'SwapFree' /proc/meminfo  | awk '{print $2}')
-  if [ $(percentage $used $total) -lt 75 ]; then
-    bad "Swap usage above 25%"
-  else
-    ok "Swap usage below 25%"
-  fi
+    total=$($GREP 'SwapTotal' /proc/meminfo  | $AWK '{print $2}')
+    if [ $total -eq 0 ]; then
+        WARN "There appears to be no swap on this system"
+        return
+    fi
+    used=$($GREP 'SwapFree' /proc/meminfo  | $AWK '{print $2}')
+    if [ $(percentage $used $total) -lt 75 ]; then
+        BAD "Swap usage above 25%"
+    else
+        OK "Swap usage below 25%"
+    fi
 }
 
-nfs_timeout() {
-  if egrep -q '^nfs ' /proc/modules; then
-    if dmesg | egrep -q "nfs: server .* not responding"; then
-      bad "NFS timeouts found"
+sem_test() {
+    num="$(echo -ne "$($IPCS -l |grep "max number of arrays" |$AWK '{print $6}') -  $($IPCS -u |grep "used arrays"|$AWK '{print $4}')\n" |$BC)"
+
+    if [ $num -lt $SEM_low ]; then
+        BAD "Semaphores available below $SEM_low"
     else
-      ok "No NFS timeouts found"
+        OK "Semaphores available higher than $SEM_low"
     fi
-  fi
+
+}
+
+
+nfs_timeout() {
+    if $EGREP '^nfs ' /proc/modules; then
+        if echo $DMO | $EGREP "nfs: server .* not responding"; then
+            BAD "NFS timeouts found"
+        else
+            OK "No NFS timeouts found"
+        fi
+    fi
 }
 
 ### Global and kernel checks
 recently_rebooted() {
-  if [ $(cat /proc/uptime | sed -e 's/\..*//') -lt 1800 ]; then
-    bad "Server has been up less than 30 minutes"
-  else
-    ok "Server has been running longer than 30 minutes"
-  fi
+    if [ $(cat /proc/uptime | $SED -e 's/\..*//') -lt 1800 ]; then
+        BAD "Server has been up less than 30 minutes"
+    else
+        OK "Server has been running longer than 30 minutes"
+    fi
 }
 
 hung_task() {
-  if dmesg | grep -q "hung_task_timeout_secs"; then
-    bad "Evidence of hung tasks found in kernel log"
-  else
-    ok "No hung tasks logged in ringbuffer"
-  fi
+    if echo $GMO | $GREP -q "hung_task_timeout_secs"; then
+        BAD "Evidence of hung tasks found in kernel log"
+    else
+        OK "No hung tasks logged in ringbuffer"
+    fi
 }
 
 soft_lockup() {
-  if dmesg | grep -q "BUG: soft lockup"; then
-    bad "CPU soft lockup logged in ringbuffer"
-  else
-    ok "No CPU soft lockups logged in ringbuffer"
-  fi
+    if echo $DMO | $GREP -q "BUG: soft lockup"; then
+        BAD "CPU soft lockup logged in ringbuffer"
+    else
+        OK "No CPU soft lockups logged in ringbuffer"
+    fi
 }
 
 conntrack_full() {
-  # Don't check if connection tracking module isn't loaded
-  if egrep -q "(ip|nf)_conntrack " /proc/modules; then
-    if dmesg | egrep -q "(ip|nf)_conntrack: table full"; then
-      bad "Connection tracking table overflows found"
-    else
-      ok "No connection tracking table overflows found"
+    # Don't check if connection tracking module isn't loaded
+    if $EGREP "(ip|nf)_conntrack " /proc/modules; then
+        if echo $DMO | $EGREP "(ip|nf)_conntrack: table full"; then
+          BAD "Connection tracking table overflows found"
+        else
+          OK "No connection tracking table overflows found"
+        fi
     fi
-  fi
 }
 
 ### Process checks
 
 check_running() {
-  # Arguments: process file
-  if [ -x $1 ]; then
-    pname=$(basename $1)
-    if [ $(pgrep $pname | wc -l) -lt 1 ]; then
-      bad "$pname installed but not running"
-    else
-      ok "$pname running"
+    # Arguments: process file
+    if [ -x $1 ]; then
+        pname=$(basename $1)
+        if [ $($PGREP $pname | $WC -l) -lt 1 ]; then
+          BAD "$pname present but not running"
+        else
+          OK "$pname running"
+        fi
     fi
-  fi
 }
 
-echo "### Global checks"
+echo -ne "\nWhatsWrong...\n\n"
+
 recently_rebooted
 conntrack_full
 hung_task
 soft_lockup
-echo "### VM checks"
+
 oom_hit
 high_swap
-echo "### FS checks"
+sem_test
+
 buffer_io_error
 uncorrectable_drive_error
 remounted_ro
 disk_full
 inode_full
 nfs_timeout
-echo "### Process checks"
+
 # Process checks should only report a problem if a service is
 # installed but not running
 
-# HTTP daemons
-check_running /usr/sbin/apache2
-check_running /usr/sbin/httpd
-check_running /usr/sbin/varnishd
-check_running /usr/sbin/nginx
+for I in $CHECKSVCS; do check_running $I; done
 
-# Databases
-check_running /usr/sbin/mysqld
-check_running /usr/bin/mongod
-
-# Misc
-check_running /usr/sbin/asterisk
-check_running /usr/sbin/named
-check_running /usr/sbin/bind9
-
-total_bad
+totals
