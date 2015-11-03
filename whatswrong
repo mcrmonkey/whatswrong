@@ -17,7 +17,7 @@
 ### Options
 ## Enable colour output
 COLOUR=1
-SUPPRESSOK=1
+SUPPRESSOK=0
 
 SEM_low="10"
 
