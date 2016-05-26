@@ -15,17 +15,19 @@
 
 
 ### Options
+
 ## Enable colour output
 COLOUR=1
+
+## Dont show OK messages
 SUPPRESSOK=0
 
+## Lower Limit for availiable semaphore's
 SEM_low="10"
 
 
 ## Services to look for
 CHECKSVCS="/usr/sbin/apache2 /usr/sbin/httpd /usr/sbin/varnishd /usr/sbin/nginx /usr/sbin/mysqld /usr/bin/mongod /usr/sbin/asterisk /usr/sbin/named /usr/sbin/bind9"
-
-
 
 
 
@@ -48,40 +50,73 @@ DMO="$($DMESG)"
 BADCOUNT=0
 WARNCOUNT=0
 OKCOUNT=0
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m'
+
+## Get mode of execution
+ if [ -t 0 ] && [ ! -p /dev/fd/0 ]
+  then
+   EXMODE="LOCAL"
+
+ elif [ ! -t 0 ] && [ -p /dev/fd/0 ]
+  then
+   EXMODE="SSH"
+
+ elif [ -t 0 ] && [ -p /dev/fd/0 ]
+  then
+   echo "LOCAL" #### TODO: interactive pipe mode ? shouldn't be reached though
+
+ elif [ ! -t 0 ] && [ ! -p /dev/fd/0 ]
+  then
+   EXMODE="NAGIOS"
+
+ fi
+
+
 
 ### Generic functions
 OK() {
-    if [ $SUPPRESSOK -ne 1 ]; then
-        if [ $COLOUR -eq 1 ]; then
-            echo -e "[\033[32m OK \033[00m]\t $1"
-        else
-            echo "[ OK ]\t $1"
+    if [ ! $EXMODE == "NAGIOS" ]; then
+        if [ $SUPPRESSOK -ne 1 ]; then
+            if [ $COLOUR -eq 1 ]; then
+                echo -e "[${GREEN} OK ${NC}]\t $1"
+            else
+                echo "[ OK ]\t $1"
+            fi
         fi
     fi
     OKCOUNT=$(($OKCOUNT+1))
 }
 
 BAD() {
-    if [ $COLOUR -eq 1 ]; then
-        echo -e "[\033[31mERROR\033[00m]\t $1"
-    else
-        echo "[ ERROR ]\t $1"
+    if [ ! $EXMODE == "NAGIOS" ]; then
+        if [ $COLOUR -eq 1 ]; then
+            printf "[${RED}ERROR${NC}]\t $1"
+        else
+            echo "[ ERROR ]\t $1"
+        fi
     fi
     BADCOUNT=$(($BADCOUNT+1))
 }
 
 
 WARN() {
-    if [ $COLOUR -eq 1 ]; then
-        echo -e "[\033[33mWARN\033[00m]\t $1"
-    else
-        echo "[ WARN ]\t $1"
+    if [ ! $EXMODE == "NAGIOS" ]; then
+        if [ $COLOUR -eq 1 ]; then
+            echo -e "[${YELLOW}WARN${NC}]\t $1"
+        else
+            echo "[ WARN ]\t $1"
+        fi
     fi
     WARNCOUNT=$(($WARNCOUNT+1))
 }
 
 totals() {
-    echo -en "\nFindings:\n $BADCOUNT errors\n $WARNCOUNT Warnings\n $OKCOUNT checks passed\n\n"
+    if [ ! $EXMODE == "NAGIOS" ]; then
+        echo -en "\n\nFindings:\n $BADCOUNT errors\n $WARNCOUNT Warnings\n $OKCOUNT checks passed\n\n"
+    fi
 }
 
 percentage() {
@@ -229,7 +264,10 @@ check_running() {
     fi
 }
 
-echo -ne "\nWhatsWrong...\n\n"
+
+if [ ! $EXMODE == "NAGIOS" ]; then
+    echo -ne "\nWhatsWrong...\n\n"
+fi
 
 recently_rebooted
 conntrack_full
@@ -252,4 +290,21 @@ nfs_timeout
 
 for I in $CHECKSVCS; do check_running $I; done
 
+
 totals
+
+
+if [ $BADCOUNT -gt 0 ]
+ then 
+  [ $EXMODE == "NAGIOS" ] && echo "CRITICAL: $BADCOUNT Errors"
+  exit 2
+
+elif [ $WARNCOUNT -gt 0 ]
+ then
+  [ $EXMODE == "NAGIOS" ] && echo "WARNING: $WARNCOUNT Warnings"
+  exit 1
+
+else
+  [ $EXMODE == "NAGIOS" ] && echo "OK: All checks return OK"
+  exit 0
+fi
